@@ -1,4 +1,6 @@
 import torch
+import copy 
+
 from expert_wrapper import SwitchExpertWrapper
 from switch_transformer import SwitchTransformersDenseActDense
 
@@ -49,4 +51,8 @@ def load_switch_expert(model_state, model_config, experts_in_cpu, num_layer):
             experts_in_cpu[(storage_layer_idx, expert_idx)] = SwitchExpertWrapper(expert, device)
             experts_in_cpu[(storage_layer_idx, expert_idx)].storage = experts_in_cpu[(storage_layer_idx, expert_idx)].storage.pin_memory()
 
+def clone_wrapper(wrapper: SwitchExpertWrapper, device):
+    expert = copy.deepcopy(wrapper.expert_module)
+    expert_gpu = SwitchExpertWrapper(expert, device)
 
+    return expert_gpu
