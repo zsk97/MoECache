@@ -36,13 +36,14 @@ if __name__ == "__main__":
     workerB.start()
 
     print("Start loading")
-    input = torch.randn((128, model_config.d_model), dtype=torch.bfloat16, device=torch.device("cuda:0"))
+    input = torch.randn((2048*16, model_config.d_model), dtype=torch.bfloat16, device=torch.device("cuda:0"))
     
     num_compute = len(real_queue)
     count = 1
 
     cache_engine.debug_info()
 
+    torch.cuda.cudart().cudaProfilerStart()
     start = time.time()
     for expert_info in prefetch_queue[0]:
         print("Prefetch expert ", expert_info)
@@ -68,8 +69,6 @@ if __name__ == "__main__":
                 print("On demand fetch ", expert_info)
                 cache_engine.prefetch(expert_info, high_priority=True)
 
-            print("******* print from host ********")
-            print(cache_engine.expert_in_use)
             # Add the prefetch of next layer into queue
             if i + 1 < num_compute:
                 for expert_info in prefetch_queue[i+1]:
@@ -79,14 +78,19 @@ if __name__ == "__main__":
             for expert_info in correct_fetch:
                 print("Loading ", expert_info)
                 module = cache_engine.load_experts(expert_info)
+                torch.cuda.nvtx.range_push("Compute Correct Expert")
                 for j in range(2):
                     res = module(input)
+                torch.cuda.nvtx.range_pop()
             
             for expert_info in ondemand_fetch:
                 module = cache_engine.load_experts(expert_info)
+                torch.cuda.nvtx.range_push("Compute Ondemand Expert")
                 for j in range(2):
                     res = module(input)
+                torch.cuda.nvtx.range_pop()
 
+    torch.cuda.cudart().cudaProfilerStop()
     torch.cuda.synchronize()
     end = time.time()
 
