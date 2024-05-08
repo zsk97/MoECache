@@ -5,6 +5,8 @@ from .config import CacheConfig
 from .load_utils import load_switch_expert, clone_wrapper
 
 import threading
+from multiprocessing import Value
+import ctypes
 from dataclasses import dataclass
 from transformers import AutoConfig
 
@@ -47,6 +49,8 @@ class CacheEngine(object):
         self.expert_in_use = dict()
 
         self.prev_expert_info = None
+
+        self.cache_lock = threading.Lock()
 
         self.copy_stream = torch.cuda.Stream()
 
@@ -106,14 +110,21 @@ class CacheEngine(object):
             continue
         
         # Wait until the expert finish
+        # TODO: This check might cause overhead
         evict_expert = list(self.expert_to_cache_pos.keys())[0]
-        while self.expert_in_use[evict_expert]:
-            print("Wait for in use expert finish ", evict_expert)
+        while True:
+            with self.cache_lock:
+                if not self.expert_in_use[evict_expert]:
+                    break
+            address = id(self.expert_in_use[evict_expert])
+            print(f"Expert {evict_expert} {address} in use ", self.expert_in_use[evict_expert])
+            print(self.expert_in_use)
+            time.sleep(0.05)
             evict_expert = list(self.expert_to_cache_pos.keys())[0]
 
         expert_info, cache_pos = self.expert_to_cache_pos.popitem(last=False)
         print("Evict expert ", expert_info)
-        assert self.expert_in_use[expert_info] == False, "Swapping a in use expert"
+        # assert self.expert_in_use[expert_info] == False, "Swapping a in use expert"
         return (expert_info, cache_pos)
 
     def invalid_experts(self, expert_info):
@@ -123,8 +134,8 @@ class CacheEngine(object):
         # Submit the invalid request into high priority queue
         # If the misfetched expert is in cache,
         # evict it and put it at the head of cache
-        request = RequestEntry(expert_info, RequestType.INVALID)
-        self.high_priority_queue.append(request)
+        callback_entry = CallbackEntry(expert_info, None, None, RequestType.INVALID)
+        self.callback_queue.append(callback_entry)
 
     def exec_request(self):
         """ Fork a new thread to deal with the request
@@ -147,7 +158,8 @@ class CacheEngine(object):
                         # Check if the module already in GPU 
                         if request.expert_info in self.expert_to_cache_pos:
                             print(f"{request.expert_info} Already in GPU")
-                            self.expert_in_use[request.expert_info] = True
+                            with self.cache_lock:
+                                self.expert_in_use[request.expert_info] = True
                             self._update_lru_cache(request.expert_info)
                         else:
                             print("Evict for ", request.expert_info)
@@ -178,13 +190,25 @@ class CacheEngine(object):
                     case RequestType.FETCH:
                         callback_entry.finish_event.synchronize()
                         self.expert_to_cache_pos[callback_entry.expert_info] = callback_entry.cache_pos
-                        self.expert_in_use[callback_entry.expert_info] = True
+                        with self.cache_lock:
+                            print(f"Expert {callback_entry.expert_info} set True")
+                            self.expert_in_use[callback_entry.expert_info] = True
                         self._update_lru_cache(callback_entry.expert_info)
 
                     case RequestType.INVALID:
-                        assert callback_entry.expert_info in self.expert_to_cache_pos, "Currently, we only support invalid expert in cache"
-                        self.expert_in_use[callback_entry.expert_info] = False
-                        self._update_lru_cache(callback_entry.expert_info, False)
+                        # The invalid expert is still under loading
+                        # We reinsert this callback and deal with it later
+                        if callback_entry.expert_info not in self.expert_to_cache_pos:
+                            # print("Fail to invalid expert", callback_entry.expert_info)
+                            # time.sleep(0.05)
+                            self.callback_queue.append(callback_entry)
+                        else:
+                            print("Invalid expert ", callback_entry.expert_info)
+                            with self.cache_lock:
+                                self.expert_in_use[callback_entry.expert_info] = False
+                            address = id(self.expert_in_use[callback_entry.expert_info])
+                            self._update_lru_cache(callback_entry.expert_info, False)
+                            print(f"Expert {callback_entry.expert_info} {address} is in use ", self.expert_in_use[callback_entry.expert_info])
 
     def exit(self):
         self.running = False
@@ -192,7 +216,8 @@ class CacheEngine(object):
     
     def _mark_unused(self):
         if self.prev_expert_info != None:
-            self.expert_in_use[self.prev_expert_info] = False
+            with self.cache_lock:
+                self.expert_in_use[self.prev_expert_info] = False
 
     def load_experts(self, expert_info):
         """ Check if this expert is ready in GPU   
@@ -208,10 +233,6 @@ class CacheEngine(object):
         return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
 
     def _copy(self, expert_info, cache_pos):
-        while self.expert_in_use[expert_info]:
-            print("Waiting for the swap expert finish")
-            time.sleep(2)
-
         with torch.cuda.stream(self.copy_stream):
             self.experts_in_gpu[cache_pos].storage.copy_(self.experts_in_cpu[expert_info].storage, non_blocking=True)
         

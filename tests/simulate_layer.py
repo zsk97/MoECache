@@ -68,6 +68,8 @@ if __name__ == "__main__":
                 print("On demand fetch ", expert_info)
                 cache_engine.prefetch(expert_info, high_priority=True)
 
+            print("******* print from host ********")
+            print(cache_engine.expert_in_use)
             # Add the prefetch of next layer into queue
             if i + 1 < num_compute:
                 for expert_info in prefetch_queue[i+1]:
