@@ -52,6 +52,9 @@ class CacheEngine(object):
 
         self.cache_lock = threading.Lock()
 
+        self.check_invalid = False
+        self.invalid_event = threading.Event()
+
         self.copy_stream = torch.cuda.Stream()
 
     def init_expert_cpu(self, model_path):
@@ -116,9 +119,7 @@ class CacheEngine(object):
             with self.cache_lock:
                 if not self.expert_in_use[evict_expert]:
                     break
-            address = id(self.expert_in_use[evict_expert])
-            print(f"Expert {evict_expert} {address} in use ", self.expert_in_use[evict_expert])
-            print(self.expert_in_use)
+            print(f"Expert {evict_expert} in use ", self.expert_in_use[evict_expert])
             time.sleep(0.05)
             evict_expert = list(self.expert_to_cache_pos.keys())[0]
 
@@ -146,6 +147,12 @@ class CacheEngine(object):
             # Check the two queues status
             request = None
 
+            # Block the request queue and wait
+            # for the check invalid finish
+            # TODO: Insert a spectial request to tell the old and new request
+            if self.check_invalid:
+                self.invalid_event.wait()
+
             if len(self.high_priority_queue) != 0:
                 request = self.high_priority_queue.popleft()
 
@@ -170,10 +177,6 @@ class CacheEngine(object):
                                 callback_entry = CallbackEntry(request.expert_info, cache_pos, torch.cuda.Event(), RequestType.FETCH)
                                 callback_entry.finish_event.record()
                             self.callback_queue.append(callback_entry)
-
-                    case RequestType.INVALID:
-                        callback_entry = CallbackEntry(request.expert_info, None, None, RequestType.INVALID)
-                        self.callback_queue.append(callback_entry)
     
     def exec_callback(self):
         """ Fork a new thread to check the callback queue
@@ -196,19 +199,35 @@ class CacheEngine(object):
                         self._update_lru_cache(callback_entry.expert_info)
 
                     case RequestType.INVALID:
-                        # The invalid expert is still under loading
-                        # We reinsert this callback and deal with it later
+                        # Block the request queue
+                        self.check_invalid = True
+
+                        # Check the low priority 
+                        size_request = len(self.low_priority_queue)
+                        count = 0
+                        for request in self.low_priority_queue:
+                            if request.expert_info == callback_entry.expert_info:
+                                print("Found prefetch request, cancel it!")
+                                del self.low_priority_queue[count]
+                                break
+
+                            count += 1
+                            if count == size_request:
+                                break
+                        
+                        self.check_invalid = False
+                        self.invalid_event.set()
+                        self.invalid_event.clear()
+
+                        # Check the callback queue
                         if callback_entry.expert_info not in self.expert_to_cache_pos:
-                            # print("Fail to invalid expert", callback_entry.expert_info)
-                            # time.sleep(0.05)
                             self.callback_queue.append(callback_entry)
                         else:
                             print("Invalid expert ", callback_entry.expert_info)
                             with self.cache_lock:
                                 self.expert_in_use[callback_entry.expert_info] = False
-                            address = id(self.expert_in_use[callback_entry.expert_info])
                             self._update_lru_cache(callback_entry.expert_info, False)
-                            print(f"Expert {callback_entry.expert_info} {address} is in use ", self.expert_in_use[callback_entry.expert_info])
+                            print(f"Expert {callback_entry.expert_info} is in use ", self.expert_in_use[callback_entry.expert_info])
 
     def exit(self):
         self.running = False
