@@ -104,8 +104,15 @@ class CacheEngine(object):
         # If all the cache is in use experts, wait!
         while len(self.expert_to_cache_pos) <= 2:
             continue
+        
+        # Wait until the expert finish
+        evict_expert = list(self.expert_to_cache_pos.keys())[0]
+        while self.expert_in_use[evict_expert]:
+            print("Wait for in use expert finish ", evict_expert)
+            evict_expert = list(self.expert_to_cache_pos.keys())[0]
 
         expert_info, cache_pos = self.expert_to_cache_pos.popitem(last=False)
+        print("Evict expert ", expert_info)
         assert self.expert_in_use[expert_info] == False, "Swapping a in use expert"
         return (expert_info, cache_pos)
 
@@ -137,13 +144,20 @@ class CacheEngine(object):
             if request != None:
                 match request.request_type:
                     case RequestType.FETCH:
-                        _, cache_pos = self._evict()
-                        self._copy(request.expert_info, cache_pos)
-                    
-                        with torch.cuda.stream(self.copy_stream):
-                            callback_entry = CallbackEntry(request.expert_info, cache_pos, torch.cuda.Event(), RequestType.FETCH)
-                            callback_entry.finish_event.record()
-                        self.callback_queue.append(callback_entry)
+                        # Check if the module already in GPU 
+                        if request.expert_info in self.expert_to_cache_pos:
+                            print(f"{request.expert_info} Already in GPU")
+                            self.expert_in_use[request.expert_info] = True
+                            self._update_lru_cache(request.expert_info)
+                        else:
+                            print("Evict for ", request.expert_info)
+                            _, cache_pos = self._evict()
+                            self._copy(request.expert_info, cache_pos)
+                        
+                            with torch.cuda.stream(self.copy_stream):
+                                callback_entry = CallbackEntry(request.expert_info, cache_pos, torch.cuda.Event(), RequestType.FETCH)
+                                callback_entry.finish_event.record()
+                            self.callback_queue.append(callback_entry)
 
                     case RequestType.INVALID:
                         callback_entry = CallbackEntry(request.expert_info, None, None, RequestType.INVALID)
@@ -192,26 +206,6 @@ class CacheEngine(object):
             continue
 
         return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
-        # if expert_info not in self.expert_to_cache_pos:
-        #     size_callback = len(self.callback_queue)
-
-        #     for i in range(size_callback):
-        #         callback_entry = self.callback_queue.popleft()
-        #         callback_entry.finish_event.synchronize()
-        #         self.expert_to_cache_pos[callback_entry.expert_info] = callback_entry.cache_pos
-        #         self.expert_in_use[callback_entry.expert_info] = True
-        #         self._update_lru_cache(callback_entry.expert_info)
-
-        #         if callback_entry.expert_info == expert_info:
-        #             print("The target expert has finished loading!")
-        #             break
-            
-        #     # TODO: One problem is that the prefetch function is too slow
-        #     # The loading task of the current expert is not submitted yet
-        #     assert expert_info in self.expert_to_cache_pos, "Failed to find target expert in finished loading task"
-        #     return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
-        # else:
-        #     return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
 
     def _copy(self, expert_info, cache_pos):
         while self.expert_in_use[expert_info]:
@@ -226,6 +220,10 @@ class CacheEngine(object):
             self.expert_to_cache_pos.move_to_end(expert_info, last=True)
         else:
             self.expert_to_cache_pos.move_to_end(expert_info, last=False)
+    
+    def debug_info(self):
+        for expert_info in self.expert_to_cache_pos.keys():
+            print("Cache expert ", expert_info)
 
 
 

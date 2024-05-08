@@ -41,8 +41,11 @@ if __name__ == "__main__":
     num_compute = len(real_queue)
     count = 1
 
+    cache_engine.debug_info()
+
     start = time.time()
     for expert_info in prefetch_queue[0]:
+        print("Prefetch expert ", expert_info)
         cache_engine.prefetch(expert_info)
 
     with torch.cuda.stream(compute_stream):
@@ -62,14 +65,17 @@ if __name__ == "__main__":
 
             # On demand load the experts
             for expert_info in ondemand_fetch:
+                print("On demand fetch ", expert_info)
                 cache_engine.prefetch(expert_info, high_priority=True)
 
             # Add the prefetch of next layer into queue
             if i + 1 < num_compute:
                 for expert_info in prefetch_queue[i+1]:
+                    print("Prefetch next layer ", expert_info)
                     cache_engine.prefetch(expert_info)
 
             for expert_info in correct_fetch:
+                print("Loading ", expert_info)
                 module = cache_engine.load_experts(expert_info)
                 for j in range(2):
                     res = module(input)
