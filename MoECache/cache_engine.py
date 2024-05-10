@@ -252,8 +252,10 @@ class CacheEngine(object):
         return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
 
     def _copy(self, expert_info, cache_pos):
+        torch.cuda.nvtx.range_push("Copy expert")
         with torch.cuda.stream(self.copy_stream):
             self.experts_in_gpu[cache_pos].storage.copy_(self.experts_in_cpu[expert_info].storage, non_blocking=True)
+        torch.cuda.nvtx.range_pop()
         
     def _update_lru_cache(self, expert_info, is_tail=True):
         if is_tail:
@@ -264,6 +266,15 @@ class CacheEngine(object):
     def debug_info(self):
         for expert_info in self.expert_to_cache_pos.keys():
             print("Cache expert ", expert_info)
+    
+    def get_prefetch_experts(self, layer_id):
+        """ This function return the prefetch expert from
+            the target layer. Normally, we only require the
+            prefetched expert from previous layer
+        """
+        assert layer_id >= 0 and layer_id < self.pattern.shape[0], "Layer ID exceeds the pattern size"
+        expert_list = torch.nonzero(self.pattern[layer_id]).flatten().tolist()
+        return expert_list
 
 
 
