@@ -25,6 +25,10 @@ def build_switch_offload_model(model_name, model_path):
     cache_engine.init_expert_cpu(model_path)
     cache_engine.init_expert_gpu()
 
+    # Random generate pattern
+    pattern = torch.randint(0, 1, (model_config.num_layers, 16))
+    cache_engine.update_pattern(pattern)
+
     logging.info("Finish setting up cache engine")
 
     with device, with_default_dtype(torch.bfloat16):
@@ -47,7 +51,7 @@ def build_switch_offload_model(model_name, model_path):
                 config=model_config,
                 layer_id=block_idx+base_layer_idx,
                 gate=curr_layer.mlp.router,
-                expert_cache=cache_engine,
+                cache_engine=cache_engine,
             )
     
     logging.info("Finish replacing MoE layer")
@@ -61,4 +65,4 @@ def build_switch_offload_model(model_name, model_path):
             non_expert_dict[key] = val
     model.load_state_dict(non_expert_dict, True)
     
-    return model
+    return model, cache_engine

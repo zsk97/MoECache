@@ -247,6 +247,7 @@ class CacheEngine(object):
 
         # The required expert might be in loading
         while expert_info not in self.expert_to_cache_pos:
+            print("Wait for expert ready")
             continue
 
         return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
