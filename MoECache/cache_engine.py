@@ -9,6 +9,7 @@ from multiprocessing import Value
 import ctypes
 from dataclasses import dataclass
 from transformers import AutoConfig
+from safetensors.torch import load_file
 
 from enum import Enum
 
@@ -61,7 +62,12 @@ class CacheEngine(object):
         """ Initialize the expert module in CPU by loading
             and filtering the model state
         """
-        model_state = torch.load(model_path, map_location=torch.device('cpu'))
+        if "pytorch.bin" in model_path:
+            weight_load_func = lambda filepath, device: torch.load(filepath, map_location=str(device))
+        else:
+            weight_load_func = lambda filepath, device: load_file(filepath, device=str(device))
+        
+        model_state = weight_load_func(model_path, torch.device("cpu"))
 
         load_switch_expert(model_state, self.model_config, self.experts_in_cpu, self.num_layers)
         
