@@ -1,4 +1,6 @@
 import torch
+import logging
+from MoECache.switch_transformer import MoEModelOutput
 
 def fix_decode_generate(
         input_ids,
@@ -26,6 +28,7 @@ def fix_decode_generate(
 
     with torch.no_grad():  # Disable gradient calculation
         for step in range(max_new_tokens):
+            logging.info(f"Step {step}")
             # Set the cache_engine prefetch pattern and launch
             # prefetch request for the first encoder layer
             if encoder_outputs is None:
@@ -48,6 +51,7 @@ def fix_decode_generate(
 
             # Select the next token based on the decode_id
             next_token = decode_ids[:, step]
+            next_token = torch.unsqueeze(next_token, dim=-1).to(torch.int)
 
             # 将生成的令牌添加到列表和解码器输入中
             generated_tokens.append(next_token)
@@ -57,7 +61,13 @@ def fix_decode_generate(
             pattern = predict_pattern[step]
 
             # Update Key-Value cache
-            past = model_outputs.past_key_values
+            past = outputs.past_key_values
 
-
-        return torch.cat(generated_tokens, dim=-1), (model_outputs.encoder_router_logits, model_outputs.decoder_router_logits)
+            # Update encoder outputs
+            if encoder_outputs is None:
+                encoder_outputs = MoEModelOutput(last_hidden_state=outputs.encoder_last_hidden_state,
+                                                 hidden_states=outputs.encoder_hidden_states,
+                                                 attentions=outputs.encoder_attentions,
+                                                 router_probs=outputs.encoder_router_logits)
+        exit(0)
+        return torch.cat(generated_tokens, dim=-1), (outputs.encoder_router_logits, outputs.decoder_router_logits)

@@ -16,7 +16,7 @@ class SwitchMoEWrapper(nn.Module):
         self.ffn_dim = config.intermediate_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
-        self.num_layer = config.num_layers
+        self.num_layer = config.num_layers + config.num_decoder_layers
         self.layer_id = layer_id
         self.router = gate
         self.cache_engine = cache_engine
@@ -46,10 +46,10 @@ class SwitchMoEWrapper(nn.Module):
 
         # Launch the prefetch for next layer, except for the last layer
         # TODO: Optimize the last layer prefetch 
-        if self.layer_id != self.num_layer - 1:
-            next_layer_experts = self.cache_engine.get_prefetch_experts(self.layer_id+1)
+        if self.layer_id+2 <= self.num_layer - 1:
+            next_layer_experts = self.cache_engine.get_prefetch_experts(self.layer_id+2)
             for expert_id in next_layer_experts:
-                self.cache_engine.prefetch((self.layer_id+1, expert_id))
+                self.cache_engine.prefetch((self.layer_id+2, expert_id))
         
         # First calculate the correct_experts and then the on-demand experts
         expert_list = list(correct_experts) + list(ondemand_experts)

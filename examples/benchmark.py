@@ -4,11 +4,17 @@ import fairscale.nn.model_parallel.initialize as fs_init
 import threading
 
 import os
+import logging
 from accessory.util import misc
 from transformers import AutoTokenizer
 from glob import glob
+from datasets import load_dataset
 
 from MoECache.build_model import build_switch_offload_model
+from MoECache.load_utils import process_dataset
+from MoECache.generate import fix_decode_generate
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def init_env():
     # define the model
@@ -24,10 +30,11 @@ if __name__ == '__main__':
         from ipdb import set_trace
         set_trace()
 
-    model_name = "google/switch-base-16"
-    model_path = "/home/scratch.shunkangz_gpu/Research/NUS_Project/Checkpoint/models--google--switch-base-16/snapshots/0ef7d88ed50ec5f2cfdc019e81cef04d19700f8f/pytorch_model.bin"
+    model_name = "google/switch-base-32"
+    model_path = "/home/scratch.shunkangz_gpu/Research/NUS_Project/Checkpoint/models--google--switch-base-32/snapshots/2018338b8dad760fa7a35a754d532486ef3942f9/pytorch_model.bin"
     model, cache_engine = build_switch_offload_model(model_name, model_path)
     model = model.bfloat16().to(device).eval()
+
 
     # Start the cache_engine
     workerA = threading.Thread(target=cache_engine.exec_request)
@@ -36,11 +43,24 @@ if __name__ == '__main__':
     workerB = threading.Thread(target=cache_engine.exec_callback)
     workerB.start()
 
-    x = torch.randint(0, 100, (8, 40)).to(device)
-    attention_mask = torch.ones(8, 40).to(device)
-    decoder_input_ids=torch.tensor([[0]]*len(x)).int().to(device)
+    # Load data
+    dataset = load_dataset("marsggbo/bigbench4switch32_pattern_predictor")
+    batch_size = 8
 
-    model(input_ids=x, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask)
+    logging.info("Start Inference")
+
+    tokenizer = AutoTokenizer.from_pretrained("google/switch-base-16")
+    tokenizer.padding_side = 'left'
+    batch_id = 0
+    for input_data, decode_id, pattern in process_dataset(dataset, tokenizer, batch_size):
+        logging.info(f"Inference for Batch {batch_id}")
+        input_ids = input_data.input_ids.to(device)
+        attention_mask = input_data.attention_mask.to(device)
+        decode_input_id = decode_id.to(device)
+        predict_pattern = pattern.to(device)
+
+        output = fix_decode_generate(input_ids, decode_input_id, attention_mask, predict_pattern, model, cache_engine)
+
 
     cache_engine.exit()
     workerA.join()

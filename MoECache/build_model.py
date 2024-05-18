@@ -1,14 +1,13 @@
 import torch
 from transformers import AutoConfig
 import logging
+from safetensors.torch import load_file
 
 from MoECache.config import CacheConfig
 from MoECache.cache_engine import CacheEngine
 from MoECache.utils import with_default_dtype
 from MoECache.switch_transformer import SwitchTransformersForConditionalGeneration
 from MoECache.moe_wrapper import SwitchMoEWrapper
-
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def build_switch_offload_model(model_name, model_path):
     device = torch.device("cuda:0")
@@ -24,10 +23,6 @@ def build_switch_offload_model(model_name, model_path):
     # TODO: Only support SwtichTransformer
     cache_engine.init_expert_cpu(model_path)
     cache_engine.init_expert_gpu()
-
-    # Random generate pattern
-    pattern = torch.randint(0, 1, (model_config.num_layers, 16))
-    cache_engine.update_pattern(pattern)
 
     logging.info("Finish setting up cache engine")
 
@@ -58,7 +53,12 @@ def build_switch_offload_model(model_name, model_path):
     
     # Load model state except experts
     # TODO: Avoid load model static twice
-    model_state_dict = torch.load(model_path, map_location=str(device))
+    if ".bin" in model_path:
+        weight_load_func = lambda filepath, device: torch.load(filepath, map_location=str(device))
+    else:
+        weight_load_func = lambda filepath, device: load_file(filepath, device=str(device))
+    
+    model_state_dict = weight_load_func(model_path, device)
     non_expert_dict = {}
     for key, val in model_state_dict.items():
         if "expert" not in key:

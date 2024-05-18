@@ -72,6 +72,8 @@ def process_dataset(dataset, tokenizer, batch_size):
     num_batch = len_dataset // batch_size
     num_moe_layer = 6
     num_expert = 32
+    num_layer = 24
+    num_encoder_layer = 12
 
     for i in range(num_batch):
         prompts = []
@@ -95,11 +97,14 @@ def process_dataset(dataset, tokenizer, batch_size):
         decode_pattern = torch.Tensor(decode_pattern)
         decode_pattern = decode_pattern.permute((2, 1, 0))
         
-        pattern = torch.zeros((decode_length, num_moe_layer, num_expert), dtype=torch.int)
+        # Switch Transformer use MoE in non-adjacent layer
+        # Currently, we only have pattern for decoder
+
+        pattern = torch.zeros((decode_length, num_layer, num_expert), dtype=torch.int)
         for token_id in range(decode_length):
             for j in range(num_moe_layer):
+                decode_layer_id = num_encoder_layer + j*2 + 1
                 batch_pattern = decode_pattern[token_id][j].to(int).flatten().unique().tolist()
-                pattern[token_id][j][batch_pattern] = 1
+                pattern[token_id][decode_layer_id][batch_pattern] = 1
 
-        
         yield input_data, decode_id, pattern

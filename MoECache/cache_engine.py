@@ -5,6 +5,7 @@ from .config import CacheConfig
 from .load_utils import load_switch_expert, clone_wrapper
 
 import threading
+import logging
 from multiprocessing import Value
 import ctypes
 from dataclasses import dataclass
@@ -62,7 +63,8 @@ class CacheEngine(object):
         """ Initialize the expert module in CPU by loading
             and filtering the model state
         """
-        if "pytorch.bin" in model_path:
+        logging.info("Initialize expert in CPU")
+        if ".bin" in model_path:
             weight_load_func = lambda filepath, device: torch.load(filepath, map_location=str(device))
         else:
             weight_load_func = lambda filepath, device: load_file(filepath, device=str(device))
@@ -79,11 +81,12 @@ class CacheEngine(object):
             Currently, I hard code this part as num_expert_in_gpu and put the
             experts at the beginning of module into GPU cache
         """
-        num_expert_in_gpu = 5
+        logging.info("Initialize expert in GPU")
+        num_expert_in_gpu = 64
         device = torch.device("cuda:0")
 
         if len(self.experts_in_cpu) < num_expert_in_gpu:
-            print("All expert can be in GPU cache")
+            logging.info("All expert can be in GPU cache")
             num_expert_in_gpu = len(self.experts_in_cpu)
 
         count = 0
@@ -125,12 +128,12 @@ class CacheEngine(object):
             with self.cache_lock:
                 if not self.expert_in_use[evict_expert]:
                     break
-            print(f"Expert {evict_expert} in use ", self.expert_in_use[evict_expert])
+            logging.debug(f"Expert {evict_expert} in use ", self.expert_in_use[evict_expert])
             time.sleep(0.05)
             evict_expert = list(self.expert_to_cache_pos.keys())[0]
 
         expert_info, cache_pos = self.expert_to_cache_pos.popitem(last=False)
-        print("Evict expert ", expert_info)
+        logging.debug("Evict expert ", expert_info)
         # assert self.expert_in_use[expert_info] == False, "Swapping a in use expert"
         return (expert_info, cache_pos)
 
@@ -170,12 +173,12 @@ class CacheEngine(object):
                     case RequestType.FETCH:
                         # Check if the module already in GPU 
                         if request.expert_info in self.expert_to_cache_pos:
-                            print(f"{request.expert_info} Already in GPU")
+                            logging.debug(f"{request.expert_info} Already in GPU")
                             with self.cache_lock:
                                 self.expert_in_use[request.expert_info] = True
                             self._update_lru_cache(request.expert_info)
                         else:
-                            print("Evict for ", request.expert_info)
+                            logging.debug("Evict for ", request.expert_info)
                             _, cache_pos = self._evict()
                             self._copy(request.expert_info, cache_pos)
                         
@@ -200,7 +203,7 @@ class CacheEngine(object):
                         callback_entry.finish_event.synchronize()
                         self.expert_to_cache_pos[callback_entry.expert_info] = callback_entry.cache_pos
                         with self.cache_lock:
-                            print(f"Expert {callback_entry.expert_info} set True")
+                            logging.debug(f"Expert {callback_entry.expert_info} set True")
                             self.expert_in_use[callback_entry.expert_info] = True
                         self._update_lru_cache(callback_entry.expert_info)
 
@@ -213,7 +216,7 @@ class CacheEngine(object):
                         count = 0
                         for request in self.low_priority_queue:
                             if request.expert_info == callback_entry.expert_info:
-                                print("Found prefetch request, cancel it!")
+                                logging.debug("Found prefetch request, cancel it!")
                                 del self.low_priority_queue[count]
                                 break
 
@@ -229,11 +232,11 @@ class CacheEngine(object):
                         if callback_entry.expert_info not in self.expert_to_cache_pos:
                             self.callback_queue.append(callback_entry)
                         else:
-                            print("Invalid expert ", callback_entry.expert_info)
+                            logging.debug("Invalid expert ", callback_entry.expert_info)
                             with self.cache_lock:
                                 self.expert_in_use[callback_entry.expert_info] = False
                             self._update_lru_cache(callback_entry.expert_info, False)
-                            print(f"Expert {callback_entry.expert_info} is in use ", self.expert_in_use[callback_entry.expert_info])
+                            logging.debug(f"Expert {callback_entry.expert_info} is in use ", self.expert_in_use[callback_entry.expert_info])
 
     def exit(self):
         self.running = False
@@ -253,7 +256,7 @@ class CacheEngine(object):
 
         # The required expert might be in loading
         while expert_info not in self.expert_to_cache_pos:
-            print("Wait for expert ready")
+            logging.debug("Wait for expert ready")
             continue
 
         return self.experts_in_gpu[self.expert_to_cache_pos[expert_info]]
@@ -272,7 +275,7 @@ class CacheEngine(object):
     
     def debug_info(self):
         for expert_info in self.expert_to_cache_pos.keys():
-            print("Cache expert ", expert_info)
+            logging.debug("Cache expert ", expert_info)
     
     def get_prefetch_experts(self, layer_id):
         """ This function return the prefetch expert from
