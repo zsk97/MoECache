@@ -82,7 +82,7 @@ class CacheEngine(object):
             experts at the beginning of module into GPU cache
         """
         logging.info("Initialize expert in GPU")
-        num_expert_in_gpu = 64
+        num_expert_in_gpu = 12*32
         device = torch.device("cuda:0")
 
         if len(self.experts_in_cpu) < num_expert_in_gpu:
@@ -133,7 +133,7 @@ class CacheEngine(object):
             evict_expert = list(self.expert_to_cache_pos.keys())[0]
 
         expert_info, cache_pos = self.expert_to_cache_pos.popitem(last=False)
-        logging.debug("Evict expert ", expert_info)
+        logging.debug(f"Evict expert {expert_info}")
         # assert self.expert_in_use[expert_info] == False, "Swapping a in use expert"
         return (expert_info, cache_pos)
 
@@ -178,7 +178,7 @@ class CacheEngine(object):
                                 self.expert_in_use[request.expert_info] = True
                             self._update_lru_cache(request.expert_info)
                         else:
-                            logging.debug("Evict for ", request.expert_info)
+                            logging.debug(f"Evict for {request.expert_info}")
                             _, cache_pos = self._evict()
                             self._copy(request.expert_info, cache_pos)
                         
@@ -232,11 +232,11 @@ class CacheEngine(object):
                         if callback_entry.expert_info not in self.expert_to_cache_pos:
                             self.callback_queue.append(callback_entry)
                         else:
-                            logging.debug("Invalid expert ", callback_entry.expert_info)
+                            logging.debug(f"Invalid expert {callback_entry.expert_info}")
                             with self.cache_lock:
                                 self.expert_in_use[callback_entry.expert_info] = False
                             self._update_lru_cache(callback_entry.expert_info, False)
-                            logging.debug(f"Expert {callback_entry.expert_info} is in use ", self.expert_in_use[callback_entry.expert_info])
+                            # logging.debug(f"Expert {callback_entry.expert_info} is in use ", self.expert_in_use[callback_entry.expert_info])
 
     def exit(self):
         self.running = False

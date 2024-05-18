@@ -14,7 +14,7 @@ from MoECache.build_model import build_switch_offload_model
 from MoECache.load_utils import process_dataset
 from MoECache.generate import fix_decode_generate
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def init_env():
     # define the model
@@ -52,16 +52,21 @@ if __name__ == '__main__':
     tokenizer = AutoTokenizer.from_pretrained("google/switch-base-16")
     tokenizer.padding_side = 'left'
     batch_id = 0
+
+    torch.cuda.cudart().cudaProfilerStart()
     for input_data, decode_id, pattern in process_dataset(dataset, tokenizer, batch_size):
         logging.info(f"Inference for Batch {batch_id}")
+        torch.cuda.nvtx.range_push(f"Batch {0}")
         input_ids = input_data.input_ids.to(device)
         attention_mask = input_data.attention_mask.to(device)
         decode_input_id = decode_id.to(device)
         predict_pattern = pattern.to(device)
 
         output = fix_decode_generate(input_ids, decode_input_id, attention_mask, predict_pattern, model, cache_engine)
+        torch.cuda.nvtx.range_pop()
+        break
 
-
+    torch.cuda.cudart().cudaProfilerStop()
     cache_engine.exit()
     workerA.join()
     workerB.join()

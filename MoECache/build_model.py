@@ -6,8 +6,19 @@ from safetensors.torch import load_file
 from MoECache.config import CacheConfig
 from MoECache.cache_engine import CacheEngine
 from MoECache.utils import with_default_dtype
-from MoECache.switch_transformer import SwitchTransformersForConditionalGeneration
+from MoECache.switch_transformer import (SwitchTransformersForConditionalGeneration, 
+                                        SwitchTransformersAttention, SwitchTransformersLayerFF,
+                                        SwitchTransformersSparseMLP)
 from MoECache.moe_wrapper import SwitchMoEWrapper
+
+def forward_pre_hook(module, input):
+    if isinstance(module, SwitchMoEWrapper):
+        torch.cuda.nvtx.range_push(f"Layer ID {module.layer_id} {module.__class__.__name__}")
+    else:
+        torch.cuda.nvtx.range_push(f"Layer ID {module.__class__.__name__}")
+
+def forward_post_hook(module, input, output):
+    torch.cuda.nvtx.range_pop()
 
 def build_switch_offload_model(model_name, model_path):
     device = torch.device("cuda:0")
@@ -64,5 +75,12 @@ def build_switch_offload_model(model_name, model_path):
         if "expert" not in key:
             non_expert_dict[key] = val
     model.load_state_dict(non_expert_dict, True)
+
+    # Add hook for model
+    for module in model.modules():
+        if isinstance(module, SwitchMoEWrapper) or isinstance(module, SwitchTransformersAttention) or \
+        isinstance(module, SwitchTransformersLayerFF) or isinstance(module, SwitchTransformersSparseMLP):
+            module.register_forward_pre_hook(forward_pre_hook)
+            module.register_forward_hook(forward_post_hook)
     
     return model, cache_engine

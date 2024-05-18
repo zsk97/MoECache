@@ -29,6 +29,7 @@ def fix_decode_generate(
     with torch.no_grad():  # Disable gradient calculation
         for step in range(max_new_tokens):
             logging.info(f"Step {step}")
+            torch.cuda.nvtx.range_push(f"Step {step}")
             # Set the cache_engine prefetch pattern and launch
             # prefetch request for the first encoder layer
             if encoder_outputs is None:
@@ -69,5 +70,8 @@ def fix_decode_generate(
                                                  hidden_states=outputs.encoder_hidden_states,
                                                  attentions=outputs.encoder_attentions,
                                                  router_probs=outputs.encoder_router_logits)
-        exit(0)
+            torch.cuda.nvtx.range_pop()
+            
+            if step == 3:
+                return
         return torch.cat(generated_tokens, dim=-1), (outputs.encoder_router_logits, outputs.decoder_router_logits)
